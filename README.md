@@ -1,4 +1,4 @@
-# DrupalCamp Spain Base
+# Drupal Iberia 2027
 
 ## Initial setup
 
