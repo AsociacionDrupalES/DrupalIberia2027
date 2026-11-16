@@ -1,0 +1,2 @@
+label: 'Job Listing'
+pattern: '/job/[node:field_company]/[node:title]'

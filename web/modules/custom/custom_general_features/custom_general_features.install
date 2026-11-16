@@ -1,0 +1,137 @@
+<?php
+
+/**
+ * @file
+ * Install, update and uninstall functions for custom_general_features module.
+ */
+
+use Drupal\Core\Entity\ContentEntityInterface;
+
+/**
+ * Remove all Galician (gl) translations from content entities.
+ *
+ * Affected entity types: node, paragraph, taxonomy_term, menu_link_content,
+ * path_alias.
+ */
+
+function custom_general_features_update_11001(&$sandbox): string {
+  $lang = 'gl';
+  $db = \Drupal::database();
+
+  // Initialise the sandbox on the first run.
+  if (!isset($sandbox['total'])) {
+    $sandbox['entity_types'] = [
+      'node' => [
+        'table' => 'node_field_data',
+        'id_col' => 'nid',
+      ],
+      'paragraph' => [
+        'table' => 'paragraphs_item_field_data',
+        'id_col' => 'id',
+      ],
+      'taxonomy_term' => [
+        'table' => 'taxonomy_term_field_data',
+        'id_col' => 'tid',
+      ],
+      'menu_link_content' => [
+        'table' => 'menu_link_content_data',
+        'id_col' => 'id',
+      ],
+      'path_alias' => [
+        'table' => 'path_alias',
+        'id_col' => 'id',
+      ],
+    ];
+
+    // Count total entities to process across all types.
+    $sandbox['total'] = 0;
+    foreach ($sandbox['entity_types'] as $info) {
+      $sandbox['total'] += (int) $db->select($info['table'], 't')
+        ->fields('t', [$info['id_col']])
+        ->condition('t.langcode', $lang)
+        ->distinct()
+        ->countQuery()
+        ->execute()
+        ->fetchField();
+    }
+
+    $sandbox['processed'] = 0;
+    $sandbox['current_type_index'] = 0;
+    $sandbox['messages'] = [];
+
+    if ($sandbox['total'] === 0) {
+      $sandbox['#finished'] = 1;
+      return 'No Galician translations found. Nothing to do.';
+    }
+  }
+
+  $batch_size = 25;
+  $entity_type_ids = array_keys($sandbox['entity_types']);
+
+  $entity_type_id = $entity_type_ids[$sandbox['current_type_index']];
+  $info = $sandbox['entity_types'][$entity_type_id];
+
+  $ids = $db->select($info['table'], 't')
+    ->fields('t', [$info['id_col']])
+    ->condition('t.langcode', $lang)
+    ->distinct()
+    ->range(0, $batch_size)
+    ->execute()
+    ->fetchCol();
+
+  if (empty($ids)) {
+    $sandbox['messages'][] = "Finished $entity_type_id.";
+    $sandbox['current_type_index']++;
+  }
+  else {
+    $storage = \Drupal::entityTypeManager()->getStorage($entity_type_id);
+    $entities = $storage->loadMultiple($ids);
+
+    foreach ($ids as $id) {
+      $entity = $entities[$id] ?? NULL;
+
+      if (!$entity instanceof ContentEntityInterface) {
+        \Drupal::logger('custom_general_features')->warning('Could not load @type entity @id, skipping.', [
+          '@type' => $entity_type_id,
+          '@id' => $id,
+        ]);
+        $sandbox['processed']++;
+        continue;
+      }
+
+      if ($entity_type_id === 'path_alias') {
+        // Path aliases store langcode as a direct field, not via Drupal's
+        // translation API, so hasTranslation() does not apply. Delete directly.
+        $entity->delete();
+      }
+      elseif ($entity->hasTranslation($lang)) {
+        if ($entity->getUntranslated()->language()->getId() === $lang) {
+          $entity->delete();
+        }
+        else {
+          $entity->removeTranslation($lang);
+          $entity->save();
+        }
+      }
+
+      $sandbox['processed']++;
+    }
+  }
+
+  // Finished when all entity types have been exhausted.
+  $sandbox['#finished'] = ($sandbox['current_type_index'] >= count($entity_type_ids)) ? 1 : 0;
+
+  if ($sandbox['#finished'] >= 1) {
+    return sprintf(
+      'Removed Galician (gl) translations from %d entities (%s).',
+      $sandbox['processed'],
+      implode(', ', $sandbox['messages'])
+    );
+  }
+
+  return sprintf(
+    'Removing Galician translations: processing %s (%d done so far).',
+    $entity_type_id,
+    $sandbox['processed']
+  );
+}
